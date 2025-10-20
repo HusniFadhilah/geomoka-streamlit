@@ -9,6 +9,7 @@ from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from dotenv import load_dotenv
 import requests
 from typing import Dict, Optional, Any, List, Union, Tuple
 
@@ -20,6 +21,7 @@ from folium.plugins import Draw
 # =========================
 # 0) PAGE CONFIG
 # =========================
+load_dotenv()
 Coord = Union[float, int]
 Pair = List[Coord]
 LAT_MIN, LAT_MAX = -11.5, 6.5
@@ -50,39 +52,62 @@ st.markdown("""
 # =========================
 # 1) AUTH / INITIALIZATION
 # =========================
-SERVICE_ACCOUNT = "geomoka@endless-bounty-416008.iam.gserviceaccount.com"
-KEY_FILE = os.getenv("GEE_KEY_FILE", "endless-bounty-416008-a6cce2f8b208.json")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.sp3stab.id/api/en")
+SERVICE_ACCOUNT = os.getenv("SERVICE_ACCOUNT_EMAIL", "geomoka@endless-bounty-416008.iam.gserviceaccount.com")
+GEE_KEY_FILE = os.getenv("GEE_KEY_FILE", "./endless-bounty-416008-a6cce2f8b208.json")
+GEE_KEY_JSON = os.getenv("GEE_KEY_JSON")
 
 def init_ee():
     """Initialize Google Earth Engine"""
-    if Path(KEY_FILE).exists():
-        try:
-            credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEY_FILE)
-            ee.Initialize(credentials)
-            st.success("✔ Earth Engine initialized with local Service Account credentials.")
-            return
-        except Exception as e:
-            st.error(f"Gagal inisialisasi GEE dari file lokal: {e}")
-
-    if "gcp_service_account" in st.secrets:
-        try:
+    try:
+        # Prioritas 1: Streamlit secrets
+        if "gcp_service_account" in st.secrets:
             from google.oauth2 import service_account
-            sa_info = st.secrets["gcp_service_account"]
-            creds = service_account.Credentials.from_service_account_info(sa_info)
-            ee.Initialize(creds)
+            sa_info = dict(st.secrets["gcp_service_account"])
+            # Pastikan newline di private key benar
+            if "private_key" in sa_info:
+                sa_info["private_key"] = sa_info["private_key"].replace("\\n", "\n")
+            scopes = [
+                "https://www.googleapis.com/auth/earthengine",
+                "https://www.googleapis.com/auth/devstorage.read_write",
+            ]
+            creds = service_account.Credentials.from_service_account_info(sa_info, scopes=scopes)
+            ee.Initialize(credentials=creds)
             st.success("✔ Earth Engine initialized via Streamlit secrets.")
             return
-        except Exception as e:
-            st.error(f"Gagal inisialisasi GEE dari secrets: {e}")
 
-    st.error("Tidak menemukan kredensial GEE yang valid.")
-    st.stop()
+        # Prioritas 2: ENV berisi JSON langsung
+        if GEE_KEY_JSON:
+            from google.oauth2 import service_account
+            sa_info = json.loads(GEE_KEY_JSON)
+            if "private_key" in sa_info:
+                sa_info["private_key"] = sa_info["private_key"].replace("\\n", "\n")
+            scopes = [
+                "https://www.googleapis.com/auth/earthengine",
+                "https://www.googleapis.com/auth/devstorage.read_write",
+            ]
+            creds = service_account.Credentials.from_service_account_info(sa_info, scopes=scopes)
+            ee.Initialize(credentials=creds)
+            st.success("✔ Earth Engine initialized from GEE_KEY_JSON.")
+            return
+
+        # Prioritas 3: file key lokal (punya scope by default di helper EE)
+        if GEE_KEY_FILE and Path(GEE_KEY_FILE).exists():
+            credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, GEE_KEY_FILE)
+            ee.Initialize(credentials)
+            st.success("✔ Earth Engine initialized with local Service Account file.")
+            return
+
+        st.error("Tidak menemukan kredensial GEE yang valid.")
+        st.stop()
+
+    except Exception as e:
+        st.error(f"Gagal inisialisasi GEE: {e}")
+        st.stop()
 
 # =========================
 # 1B) INDONESIA ADMIN API
 # =========================
-API_BASE_URL = "https://api.sp3stab.id/api/en"
-
 @st.cache_data(ttl=3600)
 def fetch_region_dropdown(endpoint: str, parent_code: Optional[str] = None) -> Dict:
     """Fetch region list from API for dropdown"""
@@ -520,6 +545,7 @@ with st.sidebar:
 
 # Init EE
 with st.status("🔄 Initializing Earth Engine...", expanded=False) as status:
+    print('b')
     init_ee()
     status.update(label="✅ Earth Engine Ready", state="complete")
 
