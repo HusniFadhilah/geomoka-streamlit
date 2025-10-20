@@ -50,6 +50,91 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
+# SENTINEL-2 DATASET CONFIGS
+# =========================
+SENTINEL2_DATASETS = {
+    "Sentinel-2 SR Harmonized": {
+        "collection": "COPERNICUS/S2_SR_HARMONIZED",
+        "description": "Surface Reflectance (SR) Harmonized - Recommended for most use cases",
+        "scale": 10,
+        "has_qa": True,
+        "bands": {
+            "RGB": ["B4", "B3", "B2"],
+            "NIR": "B8",
+            "RED": "B4",
+            "GREEN": "B3",
+            "BLUE": "B2",
+            "SWIR1": "B11",
+            "SWIR2": "B12"
+        }
+    },
+    "Sentinel-2 SR": {
+        "collection": "COPERNICUS/S2_SR",
+        "description": "Surface Reflectance (SR) - Original version before harmonization",
+        "scale": 10,
+        "has_qa": True,
+        "bands": {
+            "RGB": ["B4", "B3", "B2"],
+            "NIR": "B8",
+            "RED": "B4",
+            "GREEN": "B3",
+            "BLUE": "B2",
+            "SWIR1": "B11",
+            "SWIR2": "B12"
+        }
+    },
+    "Sentinel-2 TOA": {
+        "collection": "COPERNICUS/S2",
+        "description": "Top of Atmosphere (TOA) - Raw reflectance without atmospheric correction",
+        "scale": 10,
+        "has_qa": True,
+        "bands": {
+            "RGB": ["B4", "B3", "B2"],
+            "NIR": "B8",
+            "RED": "B4",
+            "GREEN": "B3",
+            "BLUE": "B2",
+            "SWIR1": "B11",
+            "SWIR2": "B12"
+        }
+    },
+    "Sentinel-2 Level-1C": {
+        "collection": "COPERNICUS/S2_HARMONIZED",
+        "description": "Level-1C TOA Harmonized - For advanced users needing TOA data",
+        "scale": 10,
+        "has_qa": True,
+        "bands": {
+            "RGB": ["B4", "B3", "B2"],
+            "NIR": "B8",
+            "RED": "B4",
+            "GREEN": "B3",
+            "BLUE": "B2",
+            "SWIR1": "B11",
+            "SWIR2": "B12"
+        }
+    },
+    "Sentinel-2 Multispectral": {
+        "collection": "COPERNICUS/S2_SR_HARMONIZED",
+        "description": "SR Harmonized with multispectral focus (all 13 bands)",
+        "scale": 10,
+        "has_qa": True,
+        "bands": {
+            "RGB": ["B4", "B3", "B2"],
+            "NIR": "B8",
+            "RED": "B4",
+            "GREEN": "B3",
+            "BLUE": "B2",
+            "SWIR1": "B11",
+            "SWIR2": "B12",
+            "RE1": "B5",
+            "RE2": "B6",
+            "RE3": "B7",
+            "NIR_narrow": "B8A"
+        }
+    }
+}
+
+# =========================
 # 1) AUTH / INITIALIZATION
 # =========================
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.sp3stab.id/api/en")
@@ -119,11 +204,8 @@ def fetch_region_dropdown(endpoint: str, parent_code: Optional[str] = None) -> D
         response = requests.get(f"{API_BASE_URL}/{endpoint}", params=params, timeout=10)
         response.raise_for_status()
         
-        # API returns direct dictionary for dropdown
-        # Example: {"ACEH": "11", "BALI": "51", ...}
         data = response.json()
         
-        # Check if it's the expected format
         if isinstance(data, dict):
             return data
         
@@ -137,7 +219,6 @@ def looks_like_latlon(pair: Pair) -> bool:
     if not isinstance(pair, (list, tuple)) or len(pair) < 2:
         return False
     a, b = pair[0], pair[1]
-    # Pastikan numeric
     try:
         a = float(a); b = float(b)
     except Exception:
@@ -145,26 +226,18 @@ def looks_like_latlon(pair: Pair) -> bool:
     return (LAT_MIN <= a <= LAT_MAX) and (LON_MIN <= b <= LON_MAX)
 
 def swap_xy_in_coords(obj: Any) -> Any:
-    """
-    Rekursif menukar [lat, lon] -> [lon, lat] pada struktur koordinat GeoJSON.
-    Tidak akan menukar kalau tidak perlu (berdasarkan sampel deteksi).
-    """
+    """Rekursif menukar [lat, lon] -> [lon, lat] pada struktur koordinat GeoJSON."""
     if isinstance(obj, (list, tuple)):
         if len(obj) >= 2 and all(isinstance(x, (int, float, str)) for x in obj[:2]):
-            # Ini kandidat titik [*, *]
-            # Deteksi apakah [lat, lon]; jika ya, tukar
             if looks_like_latlon(obj):
                 a, b = float(obj[0]), float(obj[1])
                 rest = [float(x) for x in obj[2:]] if len(obj) > 2 else []
-                return [b, a, *rest]  # [lon, lat, (z, m, ...)]
+                return [b, a, *rest]
             else:
-                # Tidak tampak [lat, lon] (mungkin sudah [lon, lat]); biarkan
                 return [float(x) if isinstance(x, str) else x for x in obj]
         else:
-            # Turun rekursif (rings, lines, multiparts)
             return [swap_xy_in_coords(x) for x in obj]
     elif isinstance(obj, dict):
-        # Pegang kasus tak lazim, umumnya koordinat berupa list
         return {k: swap_xy_in_coords(v) if k != "type" else v for k, v in obj.items()}
     else:
         return obj
@@ -177,7 +250,6 @@ def swap_geometry(feature: Dict) -> Dict:
     gtype = geom["type"]
     coords = geom["coordinates"]
 
-    # Kita hanya perlu swap di koordinat; tipe apapun diproses rekursif
     new_coords = swap_xy_in_coords(coords)
     feature["geometry"] = {"type": gtype, "coordinates": new_coords}
     return feature
@@ -200,7 +272,6 @@ def fetch_region_geometry(endpoint: str, code: str) -> Optional[Dict]:
         if result.get("meta", {}).get("code") == 200:
             region_data = result.get("data", {}).get("region")
             if region_data and "features" in region_data:
-                # 🔧 langkah pembalikan koordinat (kondisional via heuristik)
                 region_data = swap_featurecollection(region_data)
                 return region_data
 
@@ -215,19 +286,16 @@ def geojson_to_ee_geometry(geojson_data: Dict) -> Tuple[Optional[ee.Geometry], O
         if not geojson_data or "features" not in geojson_data:
             return None, None
         
-        # Convert to GeoDataFrame
         gdf = gpd.GeoDataFrame.from_features(geojson_data["features"])
         
         if gdf.empty:
             return None, None
         
-        # Ensure WGS84
         if gdf.crs is None:
             gdf.set_crs("EPSG:4326", inplace=True)
         elif gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs("EPSG:4326")
         
-        # Convert to EE Geometry
         feature = geojson_data["features"][0]
         ee_geom = ee.Geometry(feature["geometry"])
         
@@ -388,7 +456,6 @@ def calculate_index(image, index_name):
         return bsi.rename(index_name)
     
     else:
-        # NDVI, NDWI, MNDWI, NDBI, NDMI
         bands = index_info["bands"]
         return image.normalizedDifference(bands).rename(index_name)
 
@@ -497,6 +564,20 @@ def create_hillshade_rgb(dw_col, aoi):
     return rgbImage.multiply(hillshade).clip(aoi)
 
 # =========================
+# MASKING FUNCTIONS FOR DIFFERENT DATASETS
+# =========================
+def mask_s2_clouds(img, dataset_config):
+    """Mask clouds for Sentinel-2 imagery"""
+    if dataset_config.get("has_qa"):
+        qa = img.select("QA60")
+        cloud = qa.bitwiseAnd(1 << 10).neq(0)
+        cirrus = qa.bitwiseAnd(1 << 11).neq(0)
+        mask = cloud.Or(cirrus).Not()
+        return img.updateMask(mask).divide(10000)
+    else:
+        return img.divide(10000)
+
+# =========================
 # 7) UI / SIDEBAR
 # =========================
 st.title("🌍 Google Earth Engine • Land Cover & Vegetation Analysis")
@@ -507,7 +588,7 @@ with st.sidebar:
     
     analysis_type = st.selectbox(
         "Tipe Analisis",
-        ["Vegetation Indices Analysis", "Land Cover Analysis", "Combined Analysis"]
+        ["Combined Analysis","Vegetation Indices Analysis", "Land Cover Analysis"]
     )
     
     year = st.slider("Tahun", 2017, 2025, 2022)
@@ -515,11 +596,35 @@ with st.sidebar:
     
     if analysis_type in ["Vegetation Indices Analysis", "Combined Analysis"]:
         st.subheader("Parameter Sentinel-2")
+        
+        # Sentinel-2 Dataset Selection
+        sentinel_dataset = st.selectbox(
+            "Pilih Dataset Sentinel-2",
+            list(SENTINEL2_DATASETS.keys()),
+            index=0,
+            help="Pilih dataset Sentinel-2 yang sesuai dengan kebutuhan analisis Anda"
+        )
+        
+        # Show dataset info
+        dataset_info = SENTINEL2_DATASETS[sentinel_dataset]
+        with st.expander("ℹ️ Info Dataset", expanded=False):
+            st.info(f"**{sentinel_dataset}**\n\n{dataset_info['description']}")
+            st.caption(f"Collection: `{dataset_info['collection']}`")
+            st.caption(f"Spatial Resolution: {dataset_info['scale']}m")
+        
         months = st.select_slider("Rentang bulan", options=list(range(1, 13)), value=(6, 9))
         cloud_threshold = st.slider("Ambang awan (%)", 0, 100, 40)
         
         if cloud_threshold > 80:
             st.warning("⚠️ Ambang awan tinggi dapat mempengaruhi kualitas")
+        
+        # Composite method
+        composite_method = st.selectbox(
+            "Metode Komposit",
+            ["Median", "Mean", "Max", "Min"],
+            index=0,
+            help="Pilih metode agregasi untuk membuat komposit dari multiple images"
+        )
         
         st.subheader("Indeks Vegetasi")
         selected_indices = st.multiselect(
@@ -545,7 +650,6 @@ with st.sidebar:
 
 # Init EE
 with st.status("🔄 Initializing Earth Engine...", expanded=False) as status:
-    print('b')
     init_ee()
     status.update(label="✅ Earth Engine Ready", state="complete")
 
@@ -613,7 +717,6 @@ with col1:
                     )
                     
                     if selected_city_name == "-- Gunakan Provinsi --":
-                        # Use province boundary
                         region_name = selected_province_name
                         with st.spinner(f"Loading geometry {region_name}..."):
                             geojson_data = fetch_region_geometry("province", province_code)
@@ -642,7 +745,6 @@ with col1:
                             )
                             
                             if selected_district_name == "-- Gunakan Kabupaten/Kota --":
-                                # Use city boundary
                                 region_name = selected_city_name
                                 with st.spinner(f"Loading geometry {region_name}..."):
                                     geojson_data = fetch_region_geometry("city", city_code)
@@ -671,7 +773,6 @@ with col1:
                                     )
                                     
                                     if selected_village_name == "-- Gunakan Kecamatan --":
-                                        # Use district boundary
                                         region_name = selected_district_name
                                         with st.spinner(f"Loading geometry {region_name}..."):
                                             geojson_data = fetch_region_geometry("district", district_code)
@@ -706,6 +807,19 @@ with col1:
                 if aoi:
                     st.success(f"✔ File berhasil diproses")
                     region_name = uploaded_file.name
+    
+    # ========== KOORDINAT & BUFFER ==========
+    elif aoi_mode == "Koordinat & Buffer":
+        col_lat, col_lon = st.columns(2)
+        with col_lat:
+            lat = st.number_input("Latitude", value=-6.1754, format="%.6f")
+        with col_lon:
+            lon = st.number_input("Longitude", value=106.8272, format="%.6f")
+        buffer_km = st.slider("Buffer (km)", 1, 50, 10)
+        
+        center_geom = ee.Geometry.Point([lon, lat])
+        aoi = center_geom.buffer(buffer_km * 1000).bounds()
+        region_name = f"Point ({lat:.4f}, {lon:.4f})"
 
 with col2:
     # Show attribute table
@@ -729,23 +843,19 @@ with col2:
             st.metric("CRS", str(preview_gdf.crs))
         with col_info3:
             bounds = preview_gdf.total_bounds
-            area_approx = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]) * 12100  # rough km²
+            area_approx = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]) * 12100
             st.metric("Area (approx)", f"{area_approx:.1f} km²")
     
     elif aoi_mode == "Koordinat & Buffer":
-        col_lat, col_lon, col_buffer = st.columns(3)
-        with col_lat:
-            lat = st.number_input("Latitude", value=-6.1754, format="%.6f")
-        with col_lon:
-            lon = st.number_input("Longitude", value=106.8272, format="%.6f")
-        with col_buffer:
-            buffer_km = st.slider("Buffer (km)", 1, 50, 10)
-        
-        center_geom = ee.Geometry.Point([lon, lat])
-        aoi = center_geom.buffer(buffer_km * 1000).bounds()
-        region_name = f"Point ({lat:.4f}, {lon:.4f})"
+        st.subheader(f"📊 Informasi AOI: {region_name}")
+        col_info1, col_info2 = st.columns(2)
+        with col_info1:
+            st.metric("Center Lat", f"{lat:.6f}")
+        with col_info2:
+            st.metric("Center Lon", f"{lon:.6f}")
+        st.metric("Buffer Radius", f"{buffer_km} km")
     
-    else:  # Gambar di Peta
+    else:
         st.info("💡 Gambar poligon di peta bawah, lalu klik tombol 'Gunakan AOI'")
 
 # Map for AOI selection
@@ -777,10 +887,10 @@ if aoi_mode == "Gambar di Peta (Poligon)":
     Draw(export=True).add_to(draw_map)
 
 folium.LayerControl().add_to(draw_map)
-m_state = st_folium(draw_map, height=400, returned_objects=["all_drawings"], use_container_width=True)
+m_state = st_folium(draw_map, height=400, returned_objects=["all_drawings"], use_container_width=True, key="aoi_selection_map")
 
 if aoi_mode == "Gambar di Peta (Poligon)":
-    if st.button("Gunakan AOI dari poligon yang digambar", type="primary"):
+    if st.button("Gunakan AOI dari poligon yang digambar", type="primary", key="use_polygon_btn"):
         drawings = m_state.get("all_drawings", [])
         if drawings:
             last = drawings[-1]
@@ -805,47 +915,60 @@ def date_range_for_year_months(y, m0, m1):
     end = f"{y}-12-31" if m1 == 12 else f"{y}-{int(m1)+1:02d}-01"
     return start, end
 
-def mask_s2_clouds(img):
-    qa = img.select("QA60")
-    cloud = qa.bitwiseAnd(1 << 10).neq(0)
-    cirrus = qa.bitwiseAnd(1 << 11).neq(0)
-    mask = cloud.Or(cirrus).Not()
-    return img.updateMask(mask).divide(10000)
-
 layers = {}
 vis_params = {}
 index_layers = {}
+collection_size = 0
 
 # Vegetation Indices Analysis
 if analysis_type in ["Vegetation Indices Analysis", "Combined Analysis"]:
     with st.status("🛰️ Processing Sentinel-2 imagery...", expanded=True) as status:
         start_date, end_date = date_range_for_year_months(year, months[0], months[1])
         
+        # Get selected dataset config
+        dataset_config = SENTINEL2_DATASETS[sentinel_dataset]
+        
+        status.write(f"📡 Dataset: {sentinel_dataset}")
         status.write(f"📅 Date range: {start_date} to {end_date}")
         
-        s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        s2 = (ee.ImageCollection(dataset_config["collection"])
               .filterBounds(aoi)
               .filterDate(start_date, end_date)
               .filter(ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cloud_threshold))
-              .map(mask_s2_clouds))
+              .map(lambda img: mask_s2_clouds(img, dataset_config)))
         
         collection_size = s2.size().getInfo()
-        status.write(f"📊 Found {collection_size} Sentinel-2 images")
+        status.write(f"📊 Found {collection_size} images")
         
         if collection_size > 0:
-            status.write("🔄 Creating median composite...")
-            median_composite = s2.median().clip(aoi)
+            status.write(f"🔄 Creating {composite_method.lower()} composite...")
             
-            layers["Sentinel-2 RGB"] = median_composite
-            vis_params["Sentinel-2 RGB"] = {"bands": ["B4", "B3", "B2"], "min": 0.0, "max": 0.3}
+            # Apply composite method
+            if composite_method == "Median":
+                composite = s2.median().clip(aoi)
+            elif composite_method == "Mean":
+                composite = s2.mean().clip(aoi)
+            elif composite_method == "Max":
+                composite = s2.max().clip(aoi)
+            elif composite_method == "Min":
+                composite = s2.min().clip(aoi)
+            else:
+                composite = s2.median().clip(aoi)
+            
+            layers[f"Sentinel-2 RGB ({sentinel_dataset})"] = composite
+            vis_params[f"Sentinel-2 RGB ({sentinel_dataset})"] = {
+                "bands": dataset_config["bands"]["RGB"], 
+                "min": 0.0, 
+                "max": 0.3
+            }
             
             # Calculate selected indices
             status.write(f"📐 Calculating {len(selected_indices)} vegetation indices...")
             for idx_name in selected_indices:
-                index_layer = calculate_index(median_composite, idx_name)
+                index_layer = calculate_index(composite, idx_name)
                 index_layers[idx_name] = index_layer
-                layers[idx_name] = index_layer
-                vis_params[idx_name] = {
+                layers[f"{idx_name} ({composite_method})"] = index_layer
+                vis_params[f"{idx_name} ({composite_method})"] = {
                     "min": VEGETATION_INDICES[idx_name]["range"][0],
                     "max": VEGETATION_INDICES[idx_name]["range"][1],
                     "palette": VEGETATION_INDICES[idx_name]["palette"]
@@ -853,20 +976,20 @@ if analysis_type in ["Vegetation Indices Analysis", "Combined Analysis"]:
             
             status.update(label="✅ Sentinel-2 processing complete", state="complete")
         else:
-            st.error(f"❌ No Sentinel-2 images found for this period. Try adjusting the date range or cloud threshold.")
+            st.error(f"❌ No images found for this period. Try adjusting the date range or cloud threshold.")
             st.stop()
 
 # Land Cover Analysis
 if analysis_type in ["Land Cover Analysis", "Combined Analysis"]:
     with st.status("🗺️ Processing land cover data...", expanded=True) as status:
         if "Dynamic World" in land_cover_datasets:
-            start_date = f"{year}-01-01"
-            end_date = f"{year}-12-31"
+            start_date_lc = f"{year}-01-01"
+            end_date_lc = f"{year}-12-31"
             
             status.write(f"🌍 Loading Dynamic World ({dw_mode} mode)...")
             
             if dw_mode == "mode":
-                dw_composite = create_dynamic_world_composite(aoi, start_date, end_date, mode='mode')
+                dw_composite = create_dynamic_world_composite(aoi, start_date_lc, end_date_lc, mode='mode')
                 layers["Dynamic World"] = dw_composite
                 vis_params["Dynamic World"] = {
                     "min": 0,
@@ -877,11 +1000,11 @@ if analysis_type in ["Land Cover Analysis", "Combined Analysis"]:
                     ]
                 }
             elif dw_mode == "hillshade":
-                dw_hillshade = create_dynamic_world_composite(aoi, start_date, end_date, mode='hillshade')
+                dw_hillshade = create_dynamic_world_composite(aoi, start_date_lc, end_date_lc, mode='hillshade')
                 layers["Dynamic World Hillshade"] = dw_hillshade
                 vis_params["Dynamic World Hillshade"] = {}
             else:
-                dw_prob = create_dynamic_world_composite(aoi, start_date, end_date, mode='probability')
+                dw_prob = create_dynamic_world_composite(aoi, start_date_lc, end_date_lc, mode='probability')
                 layers["DW Water Probability"] = dw_prob.select('water')
                 vis_params["DW Water Probability"] = {"min": 0, "max": 1, "palette": ['white', 'blue']}
         
@@ -915,8 +1038,8 @@ st.subheader("🗺️ Hasil Peta")
 
 try:
     center_geom = ee.Geometry(aoi).bounds(maxError=10).centroid(maxError=10)
-    lon, lat = center_geom.coordinates().getInfo()
-    center_pt = [lat, lon]
+    lon_center, lat_center = center_geom.coordinates().getInfo()
+    center_pt = [lat_center, lon_center]
 except:
     center_pt = start_center
 
@@ -947,7 +1070,7 @@ if len(layers) > 0:
                 result_map.add_ee_layer(layer, vis_params[layer_name], layer_name)
                 
                 # Add legend for land cover layers
-                if layer_name == "Dynamic World":
+                if "Dynamic World" in layer_name and dw_mode == "mode":
                     add_legend_to_map(result_map, LAND_COVER_LEGENDS["Dynamic_World"], "Dynamic World")
                 elif layer_name == "ESA WorldCover":
                     add_legend_to_map(result_map, LAND_COVER_LEGENDS["ESA_WorldCover"], "ESA WorldCover")
@@ -958,13 +1081,30 @@ if len(layers) > 0:
                 st_folium(result_map, height=600, use_container_width=True, key=f"map_{i}")
             
             with col_info:
-                if layer_name in VEGETATION_INDICES:
+                # Extract base index name
+                base_layer_name = layer_name.split(" (")[0]
+                
+                if base_layer_name in VEGETATION_INDICES:
                     st.markdown("### Info Indeks")
-                    info = VEGETATION_INDICES[layer_name]
+                    info = VEGETATION_INDICES[base_layer_name]
                     st.markdown(f"**{info['name']}**")
                     st.markdown(f"*Formula:* `{info['formula']}`")
                     st.markdown(f"*Deskripsi:* {info['description']}")
                     st.markdown(f"*Range:* {info['range'][0]} to {info['range'][1]}")
+                    
+                    if analysis_type in ["Vegetation Indices Analysis", "Combined Analysis"]:
+                        st.markdown("---")
+                        st.markdown("### Dataset Info")
+                        st.markdown(f"**Dataset:** {sentinel_dataset}")
+                        st.markdown(f"**Composite:** {composite_method}")
+                
+                elif "Sentinel-2 RGB" in layer_name:
+                    st.markdown("### Dataset Info")
+                    st.markdown(f"**Dataset:** {sentinel_dataset}")
+                    st.markdown(f"**Collection:** `{dataset_config['collection']}`")
+                    st.markdown(f"**Resolution:** {dataset_config['scale']}m")
+                    st.markdown(f"**Composite:** {composite_method}")
+                    st.markdown(f"**Images Used:** {collection_size}")
                 
                 # Show region info
                 st.markdown("---")
@@ -987,6 +1127,7 @@ st.subheader("📊 Statistik")
 if index_layers:
     with st.status("📈 Calculating vegetation indices statistics...", expanded=True) as status:
         st.write("### Statistik Indeks Vegetasi")
+        st.caption(f"Dataset: **{sentinel_dataset}** | Composite: **{composite_method}**")
         
         # Calculate statistics for all indices
         stats_data = []
@@ -1001,7 +1142,7 @@ if index_layers:
                         ), sharedInputs=True
                     ),
                     geometry=aoi,
-                    scale=20,
+                    scale=dataset_config["scale"],
                     maxPixels=1e8,
                     bestEffort=True,
                 ).getInfo() or {}
@@ -1034,14 +1175,14 @@ if index_layers:
                 df_stats, 
                 x='Index', 
                 y='Mean',
-                title='Nilai Mean Indeks Vegetasi',
+                title=f'Nilai Mean Indeks Vegetasi ({composite_method} Composite)',
                 color='Mean',
                 color_continuous_scale='RdYlGn',
                 text='Mean'
             )
             fig_bar.update_traces(texttemplate='%{text:.3f}', textposition='outside')
             fig_bar.update_layout(height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, use_container_width=True, key="stats_bar_chart")
         
         with col2:
             # Range chart
@@ -1065,7 +1206,7 @@ if index_layers:
                 height=400,
                 showlegend=False
             )
-            st.plotly_chart(fig_range, use_container_width=True)
+            st.plotly_chart(fig_range, use_container_width=True, key="stats_range_chart")
         
         # Correlation matrix if multiple indices
         if len(index_layers) > 1:
@@ -1080,7 +1221,7 @@ if index_layers:
                     # Sample random points
                     sample = multi_band.sample(
                         region=aoi,
-                        scale=30,
+                        scale=dataset_config["scale"] * 2,
                         numPixels=1000,
                         geometries=False
                     )
@@ -1107,11 +1248,11 @@ if index_layers:
                             y=correlation.columns,
                             color_continuous_scale='RdBu',
                             aspect="auto",
-                            title="Korelasi Antar Indeks Vegetasi",
+                            title=f"Korelasi Antar Indeks Vegetasi ({sentinel_dataset})",
                             zmin=-1, zmax=1
                         )
                         fig_corr.update_layout(height=500)
-                        st.plotly_chart(fig_corr, use_container_width=True)
+                        st.plotly_chart(fig_corr, use_container_width=True, key="corr_heatmap")
                         
             except Exception as e:
                 st.info("Tidak dapat menghitung korelasi: " + str(e))
@@ -1195,12 +1336,106 @@ if any(lc in layers for lc in ["Dynamic World", "ESA WorldCover", "ESRI Land Cov
                                 )
                                 fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                                 fig_pie.update_layout(height=400)
-                                st.plotly_chart(fig_pie, use_container_width=True)
+                                st.plotly_chart(fig_pie, use_container_width=True, key=f"lc_pie_{lc_name.replace(' ', '_')}")
                     
                 except Exception as e:
                     st.warning(f"Gagal menghitung statistik {lc_name}: {e}")
         
         status.update(label="✅ Land cover statistics complete", state="complete")
+
+# =========================
+# 12) DATASET COMPARISON
+# =========================
+if analysis_type in ["Vegetation Indices Analysis", "Combined Analysis"] and selected_indices:
+    with st.expander("🔬 Perbandingan Dataset Sentinel-2 (Advanced)", expanded=False):
+        st.write("Bandingkan hasil dari berbagai dataset Sentinel-2 untuk indeks tertentu")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            compare_index = st.selectbox("Pilih Indeks untuk Perbandingan", selected_indices, key="compare_idx")
+        with col2:
+            compare_datasets = st.multiselect(
+                "Pilih Dataset untuk Dibandingkan",
+                list(SENTINEL2_DATASETS.keys()),
+                default=[sentinel_dataset],
+                key="compare_datasets"
+            )
+        
+        if len(compare_datasets) >= 2 and st.button("Bandingkan Dataset", type="primary", key="compare_btn"):
+            with st.spinner("Memproses perbandingan..."):
+                try:
+                    comparison_data = []
+                    start_date_cmp, end_date_cmp = date_range_for_year_months(year, months[0], months[1])
+                    
+                    progress_bar = st.progress(0, text="Memproses perbandingan...")
+                    
+                    for idx, ds_name in enumerate(compare_datasets):
+                        ds_config = SENTINEL2_DATASETS[ds_name]
+                        
+                        # Load and process
+                        s2_compare = (ee.ImageCollection(ds_config["collection"])
+                                     .filterBounds(aoi)
+                                     .filterDate(start_date_cmp, end_date_cmp)
+                                     .filter(ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cloud_threshold))
+                                     .map(lambda img: mask_s2_clouds(img, ds_config)))
+                        
+                        if s2_compare.size().getInfo() > 0:
+                            composite_compare = s2_compare.median().clip(aoi)
+                            index_compare = calculate_index(composite_compare, compare_index)
+                            
+                            # Calculate stats
+                            stats = index_compare.reduceRegion(
+                                reducer=ee.Reducer.mean().combine(
+                                    ee.Reducer.stdDev(), sharedInputs=True
+                                ),
+                                geometry=aoi,
+                                scale=ds_config["scale"],
+                                maxPixels=1e8,
+                                bestEffort=True
+                            ).getInfo()
+                            
+                            comparison_data.append({
+                                "Dataset": ds_name,
+                                "Mean": round(stats.get(f"{compare_index}_mean", float('nan')), 4),
+                                "Std Dev": round(stats.get(f"{compare_index}_stdDev", float('nan')), 4),
+                                "Resolution": f"{ds_config['scale']}m"
+                            })
+                        
+                        progress_bar.progress((idx + 1) / len(compare_datasets), text=f"Processing {ds_name}...")
+                    
+                    progress_bar.empty()
+                    
+                    if comparison_data:
+                        df_compare = pd.DataFrame(comparison_data)
+                        
+                        col1, col2 = st.columns([1, 2])
+                        
+                        with col1:
+                            st.dataframe(df_compare, use_container_width=True, hide_index=True)
+                        
+                        with col2:
+                            fig_compare = px.bar(
+                                df_compare,
+                                x='Dataset',
+                                y='Mean',
+                                error_y='Std Dev',
+                                title=f'Perbandingan {compare_index} Antar Dataset',
+                                color='Mean',
+                                color_continuous_scale='Viridis'
+                            )
+                            fig_compare.update_layout(height=400)
+                            st.plotly_chart(fig_compare, use_container_width=True, key="compare_bar_chart")
+                        
+                        # Statistical comparison
+                        if len(comparison_data) >= 2:
+                            mean_diff = abs(comparison_data[0]['Mean'] - comparison_data[1]['Mean'])
+                            pct_diff = (mean_diff / abs(comparison_data[0]['Mean'])) * 100 if comparison_data[0]['Mean'] != 0 else 0
+                            
+                            st.info(f"📊 Perbedaan mean antara {comparison_data[0]['Dataset']} dan {comparison_data[1]['Dataset']}: "
+                                   f"{mean_diff:.4f} ({pct_diff:.2f}%)")
+                    
+                except Exception as e:
+                    st.error(f"Error dalam perbandingan: {e}")
 
 # =========================
 # 12) TIME SERIES ANALYSIS (if applicable)
